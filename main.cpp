@@ -8,13 +8,24 @@ using namespace std;
 /* ----------  UTILITĂȚI  -------------------------------------------------- */
 
 // 1. Pentru YIELD: verifică dacă triunghiul are vârful în sus și baza în jos
+bool isTrianglePointingUp(const vector<Point>& tri) {
+    Moments m = moments(tri);
+    Point2f c(m.m10 / m.m00, m.m01 / m.m00);
+
+    int above = 0, below = 0;
+    for (auto& p : tri) (p.y < c.y) ? ++above : ++below;
+
+    return above == 1 && below == 2;
+}
+// 1. Pentru WARNING: verifică dacă triunghiul are vârful în JOS și baza în Sus
 bool isTrianglePointingDown(const vector<Point>& tri) {
     Moments m = moments(tri);
-    Point2f c(m.m10/m.m00, m.m01/m.m00);
-    int topIdx = 0;
-    for (int i = 1; i < 3; ++i)
-        if (tri[i].y < tri[topIdx].y) topIdx = i;
-    return tri[topIdx].y < c.y;
+    Point2f c(m.m10 / m.m00, m.m01 / m.m00);
+
+    int above = 0, below = 0;
+    for (auto& p : tri) (p.y < c.y) ? ++above : ++below;
+
+    return below == 1 && above == 2;
 }
 
 // 2. Returnează raportul (pixeli_roșii / pixeli_totali) în interiorul unui contur
@@ -37,7 +48,7 @@ double redFillRatio(const vector<Point>& poly,
 
 int main() {
     // (1) ÎNCĂRCARE IMAGINE
-    Mat src = imread("P:\\CURSURI\\pi\\lab_code\\proiect\\poze\\stop.jpg");
+    Mat src = imread("P:\\CURSURI\\pi\\lab_code\\proiect\\poze\\warning.png");
     if (src.empty()) {
         cerr << "Eroare la deschiderea imaginii!" << endl;
         return -1;
@@ -73,9 +84,13 @@ int main() {
         double area = contourArea(c);
         if (area < 500) continue;
 
-        double peri = arcLength(c, true);
+        vector<Point> hull;
+        convexHull(c, hull);
+
+
+        double peri = arcLength(hull, true);
         vector<Point> approx;
-        approxPolyDP(c, approx, 0.02 * peri, true);
+        approxPolyDP(hull, approx, 0.04 * peri, true);
 
         Moments m = moments(c);
         Point2f cent(m.m10/m.m00, m.m01/m.m00);
@@ -91,6 +106,13 @@ int main() {
         if (approx.size() == 3 && isTrianglePointingDown(approx)) {
             label   = "YIELD";
             color   = Scalar(0,255,0);
+            matched = true;
+        }
+        else if (approx.size() == 3 &&
+                 isTrianglePointingUp(approx) &&
+                 redRatio > 0.15 && redRatio < 0.60) {
+            label   = "WARNING";
+            color   = Scalar(0, 200, 255);
             matched = true;
         }
             // (b) STOP: 8 varfuri predominant rosu

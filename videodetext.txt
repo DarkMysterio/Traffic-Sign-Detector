@@ -1,0 +1,148 @@
+// main.cpp  – procesare video + detecţie semne rutiere
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <vector>
+#include <filesystem>
+
+using namespace cv;
+using namespace std;
+
+
+bool isTrianglePointingDown(const vector<Point>& tri) {
+    Moments m = moments(tri);
+    Point2f c(m.m10 / m.m00, m.m01 / m.m00);
+    int topIdx = 0;
+    for (int i = 1; i < 3; ++i)
+        if (tri[i].y < tri[topIdx].y) topIdx = i;
+    return tri[topIdx].y < c.y;
+}
+
+double redFillRatio(const vector<Point>& poly,
+                    const Mat& redMask,
+                    const Size& size) {
+    Mat polyMask(size, CV_8UC1, Scalar(0));
+    vector<vector<Point>> tmp{poly};
+    fillPoly(polyMask, tmp, Scalar(255));
+
+    Mat redInside;
+    bitwise_and(polyMask, redMask, redInside);
+
+    double redPx   = countNonZero(redInside);
+    double totalPx = countNonZero(polyMask);
+    return (totalPx == 0) ? 0.0 : redPx / totalPx;
+}
+
+/* ------------------------------------------------------------------------ */
+
+int main() {
+
+
+    const string outDir = "P:\\CURSURI\\pi\\lab_code\\proiect\\videoDetect";
+    std::filesystem::create_directories(outDir);   //
+
+    VideoCapture cap("P:\\CURSURI\\pi\\lab_code\\proiect\\video\\stopSignFinal.mp4");
+    if (!cap.isOpened()) {
+        cerr << "Eroare: nu pot deschide video-ul!" << endl;
+        return -1;
+    }
+
+    int frameIdx = 0;
+    Mat src;
+
+    while (cap.read(src)) {
+        /* (1) BLUR + HSV +*/
+        Mat blurred, hsv;
+        GaussianBlur(src, blurred, Size(5, 5), 2);
+        cvtColor(blurred, hsv, COLOR_BGR2HSV);
+
+        Mat mask1, mask2, redMask;
+        inRange(hsv, Scalar(0, 60, 80),   Scalar(10, 255, 255), mask1);
+        inRange(hsv, Scalar(160, 60, 80), Scalar(180, 255, 255), mask2);
+        redMask = mask1 | mask2;
+
+        morphologyEx(redMask, redMask, MORPH_CLOSE,
+                     getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
+        morphologyEx(redMask, redMask, MORPH_OPEN,
+                     getStructuringElement(MORPH_ELLIPSE, Size(3, 3)));
+
+        /* (2) DETECTARE CONTURURI */
+        vector<vector<Point>> contours;
+        findContours(redMask, contours, noArray(),
+                     RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+
+        /* (3) CLASIFICARE & DESEN */
+        Mat output = src.clone();
+        int fontFace = FONT_HERSHEY_SIMPLEX;
+        double fScale = 0.9;
+        int fThick = 2;
+
+        for (auto& c : contours) {
+            double area = contourArea(c);
+            if (area < 500) continue;
+
+            double peri = arcLength(c, true);
+            vector<Point> approx;
+            approxPolyDP(c, approx, 0.02 * peri, true);
+
+            Moments m = moments(c);
+            Point2f cent(m.m10 / m.m00, m.m01 / m.m00);
+
+            double circularity = 4 * CV_PI * area / (peri * peri);
+            double redRatio = redFillRatio(approx, redMask, src.size());
+
+            string label;
+            Scalar color;
+            bool matched = false;
+
+            // (a) YIELD
+            if (approx.size() == 3 && isTrianglePointingDown(approx)) {
+                label = "YIELD";
+                color = Scalar(0, 255, 0);
+                matched = true;
+            }
+                // (b) STOP
+            else if (approx.size() == 8 &&
+                     isContourConvex(approx) &&
+                     redRatio > 0.85) {
+                label = "STOP";
+                color = Scalar(0, 255, 0);
+                matched = true;
+            }
+                // (c) Semne circulare
+            else if (circularity > 0.80) {
+                if (redRatio < 0.35) {
+                    label = "SPEED";
+                    color = Scalar(255, 0, 0);
+                } else {
+                    label = "NO ENTRY";
+                    color = Scalar(0, 0, 255);
+                }
+                matched = true;
+            }
+
+            if (matched) {
+                polylines(output, approx, true, color, 3);
+                int base = 0;
+                Size ts = getTextSize(label, fontFace, fScale, fThick, &base);
+                Point org(int(cent.x - ts.width / 2),
+                          int(cent.y + ts.height / 2));
+                putText(output, label, org, fontFace, fScale, color, fThick);
+            }
+        }
+
+        /* (4) SALVARE CADRU ANOTAT */
+        char fname[64];
+        sprintf(fname, "%s/frame_%05d.jpg", outDir.c_str(), frameIdx++);
+        imwrite(fname, output);
+
+        /* ESC = stop */
+        imshow("Detected Signs – video", output);
+        if (waitKey(1) == 27) break;
+    }
+
+    cap.release();
+    destroyAllWindows();
+    cout << "Procesare video terminată! Rezultatele sunt în folderul \""
+         << outDir << "\".\n";
+    return 0;
+}
